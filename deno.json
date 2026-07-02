@@ -6,7 +6,8 @@
   "imports": {
     "@std/assert": "jsr:@std/assert@1",
     "effect": "npm:effect@^3.21.4",
-    "lowdb": "npm:lowdb@^7.0.1"
+    "lowdb": "npm:lowdb@^7.0.1",
+    "mongodb": "npm:mongodb@^6"
   },
   "lint": {
     "rules": {

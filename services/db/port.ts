@@ -14,13 +14,13 @@ export interface DBServicePort {
     contact: PersonShape,
   ) => Effect.Effect<PersonShape, DBServiceError>;
   readonly getContactsById: (
-    query: number,
+    query: string,
   ) => Effect.Effect<Option.Option<PersonShape>, DBServiceError>;
   readonly getContactsByTag: (
     query: string,
   ) => Effect.Effect<Option.Option<PersonShape[]>, DBServiceError>;
   readonly updateContact: (
-    id: number,
+    id: string,
     patch: Partial<PersonShape>,
   ) => Effect.Effect<PersonShape, DBServiceError>;
 }

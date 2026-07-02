@@ -89,7 +89,7 @@ export const LowDBServiceLive: Layer.Layer<
         }
         const next: PersonShape = {
           ...contact,
-          id: contact.id ?? Date.now(),
+          id: contact.id ?? crypto.randomUUID(),
         };
         const existingIdx = db.data.contacts.findIndex(
           (p: PersonShape) => p.id != null && p.id === next.id,

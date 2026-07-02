@@ -1,12 +1,13 @@
 # rolodex
 
-A small terminal-based contacts manager. One JSON file on disk, three
-subcommands, no network, no server. The whole interface is `deno task rolodex`.
+A small terminal-based contacts manager. Two interchangeable storage backends,
+four subcommands, no server. The whole interface is `deno task rolodex`.
 
 ## Install
 
-Requires [Deno](https://deno.com) 2.x. Clone the repo, then create a local
-`.env` pointing at the database file:
+Requires [Deno](https://deno.com) 2.x.
+
+### Default: file-backed JSON store
 
 ```bash
 git clone <repo-url> rolodex
@@ -17,15 +18,21 @@ touch data.json
 
 The `data.json` file can be empty — the CLI seeds it on first run.
 
+### MongoDB
+
+See the [Adapters](#adapters) section for env vars and permission flags. The
+Mongo adapter is opt-in: you wire it in `services/index.ts` (or compose it
+manually) instead of the file-backed adapter.
+
 ## Usage
 
 ```bash
 deno task rolodex help
 deno task rolodex create '{"firstName":"Ada","lastName":"Lovelace","phoneNumbers":["+44-0"],"emails":["ada@example.com"],"tags":["math","computing"],"note":"first programmer"}'
 deno task rolodex search --name ada
-deno task rolodex search --id   1783025641867
+deno task rolodex search --id   6a46ebbc5d3cdd56844aba92
 deno task rolodex search --tag  computing
-deno task rolodex update 1783025641867 '{"note":"analytical engine","tags":["math","computing","history"]}'
+deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine","tags":["math","computing","history"]}'
 ```
 
 Subcommands:
@@ -33,7 +40,7 @@ Subcommands:
 | command                      | description                                                                                     |
 | ---------------------------- | ----------------------------------------------------------------------------------------------- |
 | `search --name <query>`      | Case-insensitive substring match on first/last name.                                            |
-| `search --id <n>`            | Exact id match.                                                                                 |
+| `search --id <id>`           | Exact id match.                                                                                 |
 | `search --tag <query>`       | Case-insensitive substring match on any tag.                                                    |
 | `create <contact-json>`      | Insert a contact. Id is auto-assigned; ignore it.                                               |
 | `update <id> <contact-json>` | Apply a partial patch to the contact with the given id. Only the fields you supply are changed. |
@@ -49,10 +56,10 @@ you want to change; everything else on the record is preserved:
 
 ```bash
 # Change just the note; phones, emails, tags, and names are untouched.
-deno task rolodex update 1783025641867 '{"note":"analytical engine"}'
+deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine"}'
 
 # Change multiple fields at once.
-deno task rolodex update 1783025641867 '{"note":"x","tags":["a","b"]}'
+deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"x","tags":["a","b"]}'
 
 # An empty patch `{}` is valid and a no-op (just re-renders the record).
 ```
@@ -82,12 +89,73 @@ The `create` command takes a JSON object matching this schema:
   emails: string[],
   tags: string[],
   note: string,
-  id?: number | null,   // ignored on create; assigned by the CLI
+  id?: string | null,   // ignored on create; assigned by the adapter
 }
 ```
 
 The `update` command takes any subset of the above (excluding `id`). Anything
 else in the JSON is rejected with a schema error.
+
+Ids are strings throughout. The default (file) adapter assigns a
+`crypto.randomUUID()` on create; the Mongo adapter assigns an ObjectId hex
+string. Both render identically and the CLI never has to care which is which.
+
+## Adapters
+
+The CLI talks to a `DBService` port (see `services/db/port.ts`). Two
+implementations ship with the project; the default wiring in `services/index.ts`
+uses the file adapter. To switch, change which layer is exported from
+`services/index.ts` (or compose the layer manually in your own entry point).
+
+### File adapter (`LowDBAdapter.ts`)
+
+Backed by a single JSON file on disk. No network, no dependencies beyond
+`lowdb`. The default.
+
+- Env: `DB_FILE_LOCATION` (path to the JSON file). The file is auto-seeded with
+  `{ contacts: [] }` on first read.
+- Permission flags: `--allow-read=<file>`, `--allow-write=<file>`.
+
+### MongoDB adapter (`MongoDBAdapter.ts`)
+
+Backed by a MongoDB collection. Connection is opened on layer construction and
+closed on layer disposal (so tests and one-shot CLI runs leak no sockets).
+
+- Env:
+  - `MONGO_URI` (required) — e.g. `mongodb://localhost:27017`
+  - `MONGO_DB` (optional, default `"rolodex"`)
+  - `MONGO_COLLECTION` (optional, default `"contacts"`)
+- Permission flags: `--allow-net=<mongo-host>` (or `--allow-net` for
+  development). The driver also probes the OS release string on connect, so
+  `--allow-sys=osRelease` is required too. `--allow-env` stays required for the
+  `MONGO_*` vars.
+- Storage model: one document per contact, with Mongo's `_id` as the internal
+  identifier and the public `PersonShape.id` derived from its hex string. No
+  `id` field is persisted on the document — it's always re-derived from `_id` on
+  read, which avoids the "is this the doc's id or the public id?" ambiguity.
+- Query semantics: `--name` and `--tag` use case-insensitive regex substring
+  matches (matches the file adapter's behavior). `--id` must be a valid 24-char
+  ObjectId hex; anything else returns "no contact".
+- Update: `update` uses `findOneAndUpdate` with `$set` over the patch fields;
+  the patch's `id` is dropped before the call (the row is anchored by the
+  command-line id).
+
+To wire the Mongo adapter, replace the `ServiceLayerLive` in
+`services/index.ts`:
+
+```ts
+import { Layer } from "effect";
+import { MongoDBServiceLive } from "./db/MongoDBAdapter.ts";
+
+export const ServiceLayerLive = Layer.provide(MongoDBServiceLive);
+```
+
+and broaden the `rolodex` task's `--allow-net` flags in `deno.json` to include
+your Mongo host. Run with:
+
+```bash
+MONGO_URI="mongodb://localhost:27017" deno task rolodex search --name ada
+```
 
 ## Configuration
 
@@ -127,17 +195,18 @@ empty or invalid database file.
 
 ```
 deno.json                 Tasks, import map, lint config
-.env                      DB_FILE_LOCATION
-data.json                 The database (auto-seeded)
+.env                      DB_FILE_LOCATION (file adapter) or MONGO_URI (mongo)
+data.json                 The database (file adapter; auto-seeded)
 main.ts                   CLI entry point — calls runCLI(Deno.args)
 main_test.ts              CLI test suite (deno task test)
 services/
   cli.ts                  Argument parsing, rendering, error handling
-  index.ts                Re-exports the live service layer
+  index.ts                Re-exports the live service layer (default: file)
   db/
     port.ts               DBService tag + port interface
-    LowDBAdapter.ts       live implementation backed by lowdb/Low
+    LowDBAdapter.ts       file-backed implementation (default)
+    MongoDBAdapter.ts     MongoDB-backed implementation
 schemas/
-  DataBase.ts             { contacts: PersonShape[] }
+  DataBase.ts             { contacts: PersonShape[] } (file adapter only)
   Person/index.ts         PersonSchema + PersonPatchSchema (effect) + types
 ```
