@@ -180,6 +180,40 @@ export const MongoDBServiceLive: Layer.Layer<
         return Option.some(matches);
       });
 
+    const searchContacts: DBServicePort["searchContacts"] = (query) =>
+      Effect.gen(function* () {
+        const safe = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(safe, "i");
+        // Single $or across all four searchable fields. The application-level
+        // filter below applies the same per-field substring semantics the
+        // lowdb adapter uses, so the two adapters return identical results
+        // for the same data.
+        const docs = yield* wrap(
+          Effect.tryPromise(() =>
+            collection.find({
+              $or: [
+                { firstName: regex },
+                { lastName: regex },
+                { note: regex },
+                { tags: regex },
+              ],
+            }).toArray()
+          ),
+          "MongoDB cross-field search failed",
+        );
+        const matches = docs.map(toPerson).filter((p): p is PersonShape => {
+          if (p === null) return false;
+          return (
+            matchesQuery(p.firstName, query) ||
+            matchesQuery(p.lastName, query) ||
+            matchesQuery(p.note, query) ||
+            (Array.isArray(p.tags) &&
+              p.tags.some((tag: string) => matchesQuery(tag, query)))
+          );
+        });
+        return Option.some(matches);
+      });
+
     const updateContact: DBServicePort["updateContact"] = (id, patch) =>
       Effect.gen(function* () {
         if (!isValidObjectId(id)) {
@@ -218,6 +252,7 @@ export const MongoDBServiceLive: Layer.Layer<
       saveContact,
       getContactsById,
       getContactsByTag,
+      searchContacts,
       updateContact,
     };
   }),

@@ -77,6 +77,26 @@ Rules:
 - An unknown id produces a friendly error (exit 1) and the database is not
   touched.
 
+## Cross-field search
+
+The `DBService` port exposes a generic `searchContacts(query)` method that
+matches the query as a case-insensitive substring against any of: `firstName`,
+`lastName`, any `tag`, and the `note`. Every contact that hits on at least one
+of those fields is returned.
+
+This is not currently wired to a CLI subcommand — the CLI's `search` command
+still takes a single `--name` / `--id` / `--tag` flag. The method is on the port
+for programmatic use (e.g. from a script that composes the `DBService` layer
+directly) and to keep the two adapters' behavior identical at the API level.
+
+Both adapters implement `searchContacts`:
+
+- **File adapter**: filters the in-memory contact list with a per-field
+  substring check.
+- **MongoDB adapter**: issues a single `$or` regex query across the four fields,
+  then re-applies the same per-field substring filter in the application layer
+  (so the two adapters return identical results for the same data).
+
 ## Contact shape
 
 The `create` command takes a JSON object matching this schema:
@@ -205,6 +225,7 @@ services/
   db/
     port.ts               DBService tag + port interface
     LowDBAdapter.ts       file-backed implementation (default)
+    LowDBAdapter_test.ts  in-process adapter tests (searchContacts)
     MongoDBAdapter.ts     MongoDB-backed implementation
 schemas/
   DataBase.ts             { contacts: PersonShape[] } (file adapter only)

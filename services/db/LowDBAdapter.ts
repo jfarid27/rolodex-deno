@@ -4,7 +4,12 @@ import { DBService, DBServiceError, DBServicePort } from "./port";
 import { DataBase } from "../../schemas/DataBase";
 import { PersonShape } from "../../schemas/Person";
 
-const defaultData: DataBase = { contacts: [] };
+// Factory for a fresh empty default DB. Low mutates its `data` in place on
+// read/write, so handing the same defaultData reference to multiple Low
+// instances would let earlier instances' data leak into later ones (and
+// the per-test temp files in particular would all see accumulated state
+// from prior tests). Always build a new object per Low instance.
+const freshDefaultData = (): DataBase => ({ contacts: [] });
 
 // Custom adapter that writes JSON directly to the target file. lowdb's bundled
 // `JSONFile` uses `steno` for atomic writes (writes to `<dir>/.data.json.tmp`
@@ -31,13 +36,13 @@ const directJsonFile = (path: string) => ({
 const linkDB = (db_file: string) =>
   Effect.gen(function* () {
     yield* Effect.logDebug("Linking local lowdb database.");
-    const db = new Low<DataBase>(directJsonFile(db_file), defaultData);
+    const db = new Low<DataBase>(directJsonFile(db_file), freshDefaultData());
     // Read may throw on invalid JSON; treat that as "use default and
     // rewrite the file" so a fresh `data.json` works without manual seeding.
     yield* Effect.tryPromise(() => db.read()).pipe(
       Effect.catchAll(() =>
         Effect.gen(function* () {
-          db.data = defaultData;
+          db.data = freshDefaultData();
           yield* Effect.tryPromise({
             try: () => db.write(),
             catch: (err: unknown) =>
@@ -56,14 +61,13 @@ const fail = (message: string) => Effect.fail(new DBServiceError({ message }));
 const matchesQuery = (text: string, query: string) =>
   text.toLowerCase().includes(query.toLowerCase());
 
-export const LowDBServiceLive: Layer.Layer<
-  DBService,
-  ConfigError.ConfigError | DBServiceError,
-  never
-> = Layer.scoped(
-  DBService,
+// Internal: build the DBService implementation bound to a specific file
+// path. Used directly by tests (so they can pass a per-test temp file) and
+// indirectly by LowDBServiceLive (which reads the path from Config).
+const makeService = (
+  db_file: string,
+): Effect.Effect<DBServicePort, DBServiceError, never> =>
   Effect.gen(function* () {
-    const db_file = yield* Config.string("DB_FILE_LOCATION");
     const db = yield* linkDB(db_file);
 
     const getContactsByName: DBServicePort["getContactsByName"] = (query) =>
@@ -136,6 +140,23 @@ export const LowDBServiceLive: Layer.Layer<
         return Option.some(matches);
       });
 
+    const searchContacts: DBServicePort["searchContacts"] = (query) =>
+      Effect.gen(function* () {
+        if (!db.data || !Array.isArray(db.data.contacts)) {
+          return yield* fail(
+            "Database is in an invalid state: missing contacts array.",
+          );
+        }
+        const matches = db.data.contacts.filter((p: PersonShape) =>
+          matchesQuery(p.firstName, query) ||
+          matchesQuery(p.lastName, query) ||
+          matchesQuery(p.note, query) ||
+          (Array.isArray(p.tags) &&
+            p.tags.some((tag: string) => matchesQuery(tag, query)))
+        );
+        return Option.some(matches);
+      });
+
     const updateContact: DBServicePort["updateContact"] = (id, patch) =>
       Effect.gen(function* () {
         if (!db.data || !Array.isArray(db.data.contacts)) {
@@ -175,7 +196,30 @@ export const LowDBServiceLive: Layer.Layer<
       saveContact,
       getContactsById,
       getContactsByTag,
+      searchContacts,
       updateContact,
     };
+  });
+
+// Build a DBService layer bound to a specific file path. Exported for tests;
+// production code uses LowDBServiceLive below (which reads the path from
+// the DB_FILE_LOCATION env var via Effect's Config).
+export const makeLowDBService = (
+  db_file: string,
+): Layer.Layer<DBService, DBServiceError, never> =>
+  Layer.scoped(
+    DBService,
+    makeService(db_file),
+  );
+
+export const LowDBServiceLive: Layer.Layer<
+  DBService,
+  ConfigError.ConfigError | DBServiceError,
+  never
+> = Layer.scoped(
+  DBService,
+  Effect.gen(function* () {
+    const db_file = yield* Config.string("DB_FILE_LOCATION");
+    return yield* makeService(db_file);
   }),
 );
