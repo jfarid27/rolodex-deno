@@ -136,11 +136,46 @@ export const LowDBServiceLive: Layer.Layer<
         return Option.some(matches);
       });
 
+    const updateContact: DBServicePort["updateContact"] = (id, patch) =>
+      Effect.gen(function* () {
+        if (!db.data || !Array.isArray(db.data.contacts)) {
+          return yield* fail(
+            "Database is in an invalid state: missing contacts array.",
+          );
+        }
+        const idx = db.data.contacts.findIndex(
+          (p: PersonShape) => p.id === id,
+        );
+        if (idx < 0) {
+          return yield* fail(`No contact with id ${id}.`);
+        }
+        // Merge patch over the existing record. The `id` field on the patch is
+        // ignored — the original id is preserved so callers can't accidentally
+        // re-anchor a record to a different row.
+        const { id: _ignored, ...rest } = patch;
+        const updated: PersonShape = {
+          ...db.data.contacts[idx],
+          ...rest,
+        };
+        db.data.contacts[idx] = updated;
+        yield* Effect.tryPromise(() => db.write()).pipe(
+          Effect.catchAll((err) =>
+            Effect.fail(
+              new DBServiceError({
+                message: `Failed to write database: ${err}`,
+              }),
+            )
+          ),
+        );
+        return updated;
+      });
+
     return {
       getContactsByName,
       saveContact,
       getContactsById,
       getContactsByTag,
+      updateContact,
     };
   }),
 );

@@ -14,3 +14,18 @@ export const PersonSchema = Schema.Struct({
 });
 
 export type PersonShape = Schema.Schema.Type<typeof PersonSchema>;
+
+// Patch schema: every field is optional so callers can supply only the values
+// they want to change. Validated as a partial — if a field is present it must
+// match the underlying type (e.g. `tags` if supplied must be a string array).
+export const PersonPatchSchema = Schema.Struct({
+  id: Schema.optional(Schema.NullishOr(Schema.Number)),
+  firstName: Schema.optional(Schema.String),
+  lastName: Schema.optional(Schema.String),
+  phoneNumbers: Schema.optional(Schema.Array(PhoneNumberSchema)),
+  emails: Schema.optional(Schema.Array(EmailSchema)),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+  note: Schema.optional(Schema.String),
+});
+
+export type PersonPatchShape = Schema.Schema.Type<typeof PersonPatchSchema>;

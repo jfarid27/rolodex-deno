@@ -19,6 +19,10 @@ export interface DBServicePort {
   readonly getContactsByTag: (
     query: string,
   ) => Effect.Effect<Option.Option<PersonShape[]>, DBServiceError>;
+  readonly updateContact: (
+    id: number,
+    patch: Partial<PersonShape>,
+  ) => Effect.Effect<PersonShape, DBServiceError>;
 }
 
 export class DBService extends Context.Tag("Rolodex.services.DBService")<

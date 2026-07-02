@@ -252,3 +252,177 @@ Deno.test("--id must be an integer", async () => {
     assertStringIncludes(r.stderr, "integer");
   });
 });
+
+Deno.test("update + verify by id shows new values", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: ["+44-0"],
+      emails: ["ada@example.com"],
+      tags: ["math"],
+      note: "first programmer",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+
+    const onDisk = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: PersonShape[];
+    };
+    const adaId = onDisk.contacts[0].id;
+    assertExists(adaId);
+
+    // Patch only the note and tags; everything else should be preserved.
+    const patch = JSON.stringify({
+      note: "analytical engine",
+      tags: ["math", "computing", "history"],
+    });
+    const updateR = await runCli(
+      ["update", String(adaId), patch],
+      db,
+    );
+    assertEquals(updateR.code, 0, `stderr: ${updateR.stderr}`);
+    assertStringIncludes(updateR.stdout, "updated:");
+    assertStringIncludes(updateR.stdout, "analytical engine");
+    assertStringIncludes(updateR.stdout, "computing");
+
+    // Search by id to confirm the change was persisted.
+    const searchR = await runCli(["search", "--id", String(adaId)], db);
+    assertEquals(searchR.code, 0);
+    assertStringIncludes(searchR.stdout, "analytical engine");
+    assertStringIncludes(searchR.stdout, "computing");
+    // Untouched fields still present.
+    assertStringIncludes(searchR.stdout, "Ada Lovelace");
+    assertStringIncludes(searchR.stdout, "+44-0");
+    assertStringIncludes(searchR.stdout, "ada@example.com");
+  });
+});
+
+Deno.test("update preserves the original id (patch id is ignored)", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+
+    const before = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: PersonShape[];
+    };
+    const originalId = before.contacts[0].id;
+    assertExists(originalId);
+
+    // Try to change the id to 99999 via the patch. The CLI should still
+    // match the row by the command-line id and ignore the patch's id.
+    const patch = JSON.stringify({
+      id: 99999,
+      firstName: "Augusta",
+    });
+    const updateR = await runCli(
+      ["update", String(originalId), patch],
+      db,
+    );
+    assertEquals(updateR.code, 0, `stderr: ${updateR.stderr}`);
+
+    const after = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: PersonShape[];
+    };
+    assertEquals(after.contacts.length, 1);
+    assertEquals(after.contacts[0].id, originalId);
+    assertEquals(after.contacts[0].firstName, "Augusta");
+  });
+});
+
+Deno.test("update with non-existent id returns exit 1 with friendly error", async () => {
+  await withTempDb(async (db) => {
+    const patch = JSON.stringify({ note: "ghost" });
+    const r = await runCli(["update", "99999", patch], db);
+    assertEquals(r.code, 1);
+    assertStringIncludes(r.stderr.toLowerCase(), "no contact with id");
+  });
+});
+
+Deno.test("update with non-integer id returns exit 2", async () => {
+  await withTempDb(async (db) => {
+    const patch = JSON.stringify({ note: "x" });
+    const r = await runCli(["update", "notanumber", patch], db);
+    assertEquals(r.code, 2);
+    assertStringIncludes(r.stderr, "integer");
+  });
+});
+
+Deno.test("update with wrong arg count returns exit 2", async () => {
+  await withTempDb(async (db) => {
+    // No json arg.
+    const noJson = await runCli(["update", "1"], db);
+    assertEquals(noJson.code, 2);
+    assertStringIncludes(noJson.stderr, "exactly two");
+
+    // No args at all.
+    const noArgs = await runCli(["update"], db);
+    assertEquals(noArgs.code, 2);
+    assertStringIncludes(noArgs.stderr, "exactly two");
+
+    // Too many args.
+    const tooMany = await runCli(
+      ["update", "1", "{}", "{}"],
+      db,
+    );
+    assertEquals(tooMany.code, 2);
+    assertStringIncludes(tooMany.stderr, "exactly two");
+  });
+});
+
+Deno.test("update with invalid JSON returns exit 1", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["update", "1", "not json"], db);
+    assertEquals(r.code, 1);
+    assertStringIncludes(r.stderr.toLowerCase(), "json");
+  });
+});
+
+Deno.test("update with schema-invalid JSON returns exit 1", async () => {
+  await withTempDb(async (db) => {
+    // `tags` is present but the wrong type (number instead of string[]).
+    const bad = JSON.stringify({
+      tags: 42,
+    });
+    const r = await runCli(["update", "1", bad], db);
+    assertEquals(r.code, 1);
+    assertStringIncludes(r.stderr.toLowerCase(), "schema");
+  });
+});
+
+Deno.test("update with empty JSON object is a no-op (still succeeds)", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+    const onDisk = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: PersonShape[];
+    };
+    const adaId = onDisk.contacts[0].id;
+
+    // Empty patch should be valid and just re-render the existing record.
+    const r = await runCli(["update", String(adaId), "{}"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    assertStringIncludes(r.stdout, "Ada Lovelace");
+  });
+});
+
+Deno.test("help text mentions update subcommand", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["help"], db);
+    assertEquals(r.code, 0);
+    assertStringIncludes(r.stdout, "update <id>");
+  });
+});

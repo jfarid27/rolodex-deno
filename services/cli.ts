@@ -8,16 +8,22 @@ import {
   Schema,
 } from "effect";
 import { DBService, DBServiceError } from "./db/port.ts";
-import { PersonSchema, PersonShape } from "../schemas/Person/index.ts";
+import {
+  PersonPatchSchema,
+  PersonSchema,
+  PersonShape,
+} from "../schemas/Person/index.ts";
 import { LowDBServiceLive } from "./db/LowDBAdapter.ts";
 
 type SearchMode = "name" | "id" | "tag";
 
 interface ParsedArgs {
-  subcommand: "search" | "create" | "help";
+  subcommand: "search" | "create" | "update" | "help";
   searchMode?: SearchMode;
   searchQuery?: string | number;
   createJson?: string;
+  updateId?: number;
+  updateJson?: string;
 }
 
 const HELP_TEXT = `rolodex — terminal interface to the local contacts database
@@ -27,6 +33,7 @@ USAGE:
   deno task rolodex search --id   <query>
   deno task rolodex search --tag  <query>
   deno task rolodex create <contact-json>
+  deno task rolodex update <id> <contact-json>
   deno task rolodex help
 
 EXAMPLES:
@@ -34,6 +41,7 @@ EXAMPLES:
   deno task rolodex search --id   1783025641867
   deno task rolodex search --tag  computing
   deno task rolodex create '{"firstName":"Ada","lastName":"Lovelace","phoneNumbers":["+44-0"],"emails":["ada@example.com"],"tags":["math","computing"],"note":"first programmer"}'
+  deno task rolodex update 1783025641867 '{"note":"analytical engine","tags":["math","computing","history"]}'
 
 ENV:
   DB_FILE_LOCATION  Path to the JSON database file. Required. The rolodex task
@@ -93,6 +101,20 @@ const parseArgs = (args: string[]): ParsedArgs => {
       );
     }
     return { subcommand: "create", createJson: rest[0] };
+  }
+
+  if (subcommand === "update") {
+    if (rest.length !== 2) {
+      return usageError(
+        "update requires exactly two positional arguments: <id> <contact-json>",
+      );
+    }
+    const [idStr, jsonStr] = rest;
+    const id = Number(idStr);
+    if (!Number.isFinite(id) || !Number.isInteger(id)) {
+      return usageError(`update id must be an integer, got: ${idStr}`);
+    }
+    return { subcommand: "update", updateId: id, updateJson: jsonStr };
   }
 
   return usageError(`unknown subcommand: ${subcommand}`);
@@ -171,6 +193,35 @@ const runCreate = (rawJson: string) =>
     yield* Console.log(renderContact(saved));
   });
 
+const runUpdate = (id: number, rawJson: string) =>
+  Effect.gen(function* () {
+    const db = yield* DBService;
+
+    const parsed: unknown = yield* Effect.try({
+      try: () => JSON.parse(rawJson),
+      catch: (err: unknown) =>
+        new DBServiceError({
+          message: `Invalid JSON: ${(err as Error).message}`,
+        }),
+    });
+
+    // A patch may carry any subset of the Person fields. Each field is still
+    // type-checked (e.g. if `tags` is present it must be a string array).
+    // `id` on the patch is ignored by the adapter — the row is matched by the
+    // command-line id.
+    const decoded = yield* Schema.decodeUnknown(PersonPatchSchema)(parsed).pipe(
+      Effect.mapError((err) =>
+        new DBServiceError({
+          message: `Update JSON does not match schema: ${err.message}`,
+        })
+      ),
+    );
+
+    const updated = yield* db.updateContact(id, decoded);
+    yield* Console.log("updated:");
+    yield* Console.log(renderContact(updated));
+  });
+
 // Build a runtime that pulls DB_FILE_LOCATION from the env (with a default).
 const buildRuntime = (): ManagedRuntime.ManagedRuntime<
   DBService,
@@ -199,6 +250,8 @@ export const runCLI = async (args: string[]): Promise<void> => {
         return yield* runSearch(parsed.searchMode!, parsed.searchQuery!);
       case "create":
         return yield* runCreate(parsed.createJson!);
+      case "update":
+        return yield* runUpdate(parsed.updateId!, parsed.updateJson!);
     }
   });
 
