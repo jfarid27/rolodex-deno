@@ -1,30 +1,57 @@
-import { Effect, Layer, Config, ConfigError, Option } from "effect";
+import { Config, ConfigError, Effect, Layer, Option } from "effect";
 import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { DBService, DBServiceError, DBServicePort } from "./port";
 import { DataBase } from "../../schemas/DataBase";
 import { PersonShape } from "../../schemas/Person";
 
 const defaultData: DataBase = { contacts: [] };
 
+// Custom adapter that writes JSON directly to the target file. lowdb's bundled
+// `JSONFile` uses `steno` for atomic writes (writes to `<dir>/.data.json.tmp`
+// then renames), which breaks Deno's `--allow-write=./data.json` scope because
+// the temp file lives at a different path. For a single-user terminal app,
+// direct writes are fine.
+const directJsonFile = (path: string) => ({
+  read: async (): Promise<DataBase | null> => {
+    let text: string;
+    try {
+      text = await Deno.readTextFile(path);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) return null;
+      throw e;
+    }
+    if (text.trim() === "") return null;
+    return JSON.parse(text) as DataBase;
+  },
+  write: async (data: DataBase): Promise<void> => {
+    await Deno.writeTextFile(path, JSON.stringify(data, null, 2));
+  },
+});
+
 const linkDB = (db_file: string) =>
   Effect.gen(function* () {
     yield* Effect.logDebug("Linking local lowdb database.");
-    const db = new Low<DataBase>(new JSONFile<DataBase>(db_file), defaultData);
+    const db = new Low<DataBase>(directJsonFile(db_file), defaultData);
+    // Read may throw on invalid JSON; treat that as "use default and
+    // rewrite the file" so a fresh `data.json` works without manual seeding.
     yield* Effect.tryPromise(() => db.read()).pipe(
-      Effect.catchAll((err) =>
-        Effect.fail(
-          new DBServiceError({
-            message: `Failed to read database at ${db_file}: ${err}`,
-          }),
-        ),
+      Effect.catchAll(() =>
+        Effect.gen(function* () {
+          db.data = defaultData;
+          yield* Effect.tryPromise({
+            try: () => db.write(),
+            catch: (err: unknown) =>
+              new DBServiceError({
+                message: `Failed to seed database at ${db_file}: ${err}`,
+              }),
+          });
+        })
       ),
     );
     return db;
   });
 
-const fail = (message: string) =>
-  Effect.fail(new DBServiceError({ message }));
+const fail = (message: string) => Effect.fail(new DBServiceError({ message }));
 
 const matchesQuery = (text: string, query: string) =>
   text.toLowerCase().includes(query.toLowerCase());
@@ -78,7 +105,7 @@ export const LowDBServiceLive: Layer.Layer<
               new DBServiceError({
                 message: `Failed to write database: ${err}`,
               }),
-            ),
+            )
           ),
         );
         return next;

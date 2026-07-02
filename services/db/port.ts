@@ -1,4 +1,4 @@
-import { Effect, Option, Data, Context } from "effect";
+import { Context, Data, Effect, Option } from "effect";
 import { PersonShape } from "../../schemas/Person";
 
 export const DBServiceErrorTag = "Rolodex.services.DBServiceError";
