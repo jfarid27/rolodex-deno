@@ -7,10 +7,10 @@ import {
   ManagedRuntime,
   Schema,
 } from "effect";
-import { DBService, DBServiceError } from "./db/port.ts";
+import { DBService, DBServiceError, PersonInput } from "./db/port.ts";
 import {
+  PersonInputSchema,
   PersonPatchSchema,
-  PersonSchema,
   PersonShape,
 } from "../schemas/Person/index.ts";
 import { LowDBServiceLive } from "./db/LowDBAdapter.ts";
@@ -125,6 +125,8 @@ const renderContact = (p: PersonShape): string => {
     `  emails : ${emails}`,
     `  tags   : ${tags}`,
     `  note   : ${p.note}`,
+    `  created: ${p.createdAt.toISOString()}`,
+    `  updated: ${p.updatedAt.toISOString()}`,
   ].join("\n");
 };
 
@@ -171,7 +173,9 @@ const runCreate = (rawJson: string) =>
         }),
     });
 
-    const decoded = yield* Schema.decodeUnknown(PersonSchema)(parsed).pipe(
+    // Decode the user payload against the input schema (no id, no
+    // timestamps — both are system-managed). The adapter fills them in.
+    const decoded = yield* Schema.decodeUnknown(PersonInputSchema)(parsed).pipe(
       Effect.mapError((err) =>
         new DBServiceError({
           message: `Contact JSON does not match schema: ${err.message}`,
@@ -179,8 +183,10 @@ const runCreate = (rawJson: string) =>
       ),
     );
 
-    // Force id to null on create — the user said no updates, only creation.
-    const fresh: PersonShape = { ...decoded, id: null };
+    // id is forced to null on create — the user said no updates, only
+    // creation. The adapter will assign a real id, plus createdAt and
+    // updatedAt.
+    const fresh: PersonInput = { ...decoded, id: null };
 
     const saved = yield* db.saveContact(fresh);
     yield* Console.log("created:");

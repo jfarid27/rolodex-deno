@@ -1,5 +1,17 @@
 import { Context, Data, Effect, Option } from "effect";
+// Re-export `PersonShape` here so consumers of the port can pull both
+// `PersonShape` (the full in-memory record) and `PersonInput` (what
+// `saveContact` accepts) from a single import.
+export type { PersonShape } from "../../schemas/Person";
 import { PersonShape } from "../../schemas/Person";
+
+// PersonInput is the type the adapters' `saveContact` accepts. It's the full
+// in-memory shape minus the two system-managed timestamps: id may be set
+// (upsert into a known row) or null/undefined (insert a new row), and the
+// adapter will fill in id, createdAt, and updatedAt as needed.
+export type PersonInput = Omit<PersonShape, "createdAt" | "updatedAt"> & {
+  id: string | null | undefined;
+};
 
 export const DBServiceErrorTag = "Rolodex.services.DBServiceError";
 export class DBServiceError extends Data.TaggedError(DBServiceErrorTag)<{
@@ -11,7 +23,7 @@ export interface DBServicePort {
     query: string,
   ) => Effect.Effect<Option.Option<PersonShape[]>, DBServiceError>;
   readonly saveContact: (
-    contact: PersonShape,
+    contact: PersonInput,
   ) => Effect.Effect<PersonShape, DBServiceError>;
   readonly getContactsById: (
     query: string,

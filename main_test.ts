@@ -431,3 +431,200 @@ Deno.test("help text mentions update subcommand", async () => {
     assertStringIncludes(r.stdout, "update <id>");
   });
 });
+
+// On-disk representation of a contact. Mirrors the file-adapter's storage
+// format: timestamps are ISO strings, not Date instances. We type it
+// loosely to keep the test focused on the timestamp fields' shape rather
+// than the rest of the contact.
+interface OnDiskContact {
+  id: string;
+  firstName: string;
+  lastName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+Deno.test("create stamps createdAt and updatedAt to roughly the same time", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    const before = Date.now();
+    const r = await runCli(["create", ada], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const after = Date.now();
+
+    const onDisk = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: OnDiskContact[];
+    };
+    assertEquals(onDisk.contacts.length, 1);
+    const c = onDisk.contacts[0];
+
+    // createdAt and updatedAt should be valid ISO timestamps, both
+    // stamped during the create call.
+    const createdMs = new Date(c.createdAt).getTime();
+    const updatedMs = new Date(c.updatedAt).getTime();
+    assert(!Number.isNaN(createdMs), "createdAt should be a valid date");
+    assert(!Number.isNaN(updatedMs), "updatedAt should be a valid date");
+    // Allow a 10ms window on either side for clock jitter; the create
+    // call should always stamp them in the same instant.
+    assert(
+      createdMs >= before - 10 && createdMs <= after + 10,
+      `createdAt ${c.createdAt} out of expected window [${before}, ${after}]`,
+    );
+    assert(
+      updatedMs >= before - 10 && updatedMs <= after + 10,
+      `updatedAt ${c.updatedAt} out of expected window [${before}, ${after}]`,
+    );
+  });
+});
+
+Deno.test("create renders the timestamps in the CLI output", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    const r = await runCli(["create", ada], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    // The renderer should expose the two timestamps. We don't assert the
+    // exact format — just that the lines and the date values are present.
+    assertStringIncludes(r.stdout, "created:");
+    assertStringIncludes(r.stdout, "updated:");
+    // The date is rendered as an ISO string; the regex matches the "Z"
+    // suffix that Date.prototype.toISOString() always emits.
+    assert(
+      /created: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/.test(
+        r.stdout,
+      ),
+      `expected an ISO timestamp in the created line; got:\n${r.stdout}`,
+    );
+    assert(
+      /updated: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/.test(
+        r.stdout,
+      ),
+      `expected an ISO timestamp in the updated line; got:\n${r.stdout}`,
+    );
+  });
+});
+
+Deno.test("update preserves createdAt and bumps updatedAt", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+
+    const beforeUpdate = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: OnDiskContact[];
+    };
+    const originalCreatedAt = beforeUpdate.contacts[0].createdAt;
+    const originalUpdatedAt = beforeUpdate.contacts[0].updatedAt;
+    const adaId = beforeUpdate.contacts[0].id;
+
+    // Sleep a few ms so the updatedAt is guaranteed to be later than
+    // createdAt at ms resolution (timestamps are ISO strings with ms
+    // precision). Effect's date is ms-granular.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const patch = JSON.stringify({ note: "analytical engine" });
+    const r = await runCli(["update", adaId, patch], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+
+    const afterUpdate = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: OnDiskContact[];
+    };
+    const c = afterUpdate.contacts[0];
+    assertEquals(
+      c.createdAt,
+      originalCreatedAt,
+      "createdAt must be preserved across an update",
+    );
+    assert(
+      new Date(c.updatedAt).getTime() >
+        new Date(originalUpdatedAt).getTime(),
+      `updatedAt should advance after an update (was ${originalUpdatedAt}, now ${c.updatedAt})`,
+    );
+  });
+});
+
+Deno.test("a contact's updatedAt > createdAt after an update", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+    const before = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: OnDiskContact[];
+    };
+    const adaId = before.contacts[0].id;
+
+    // Tiny delay so the update's timestamp is strictly later.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const patch = JSON.stringify({ note: "x" });
+    assertEquals(
+      (await runCli(["update", adaId, patch], db)).code,
+      0,
+    );
+    const after = JSON.parse(await Deno.readTextFile(db)) as {
+      contacts: OnDiskContact[];
+    };
+    const c = after.contacts[0];
+    assert(
+      new Date(c.updatedAt).getTime() > new Date(c.createdAt).getTime(),
+      `updatedAt (${c.updatedAt}) should be strictly after createdAt (${c.createdAt})`,
+    );
+  });
+});
+
+Deno.test("old data files without timestamps are backfilled with the epoch", async () => {
+  await withTempDb(async (db) => {
+    // Hand-write a contact that predates the timestamp feature: no
+    // createdAt, no updatedAt. The file adapter should backfill both
+    // with the epoch sentinel (1970-01-01T00:00:00.000Z) on read.
+    const legacy = {
+      contacts: [
+        {
+          id: "legacy-id",
+          firstName: "Legacy",
+          lastName: "L",
+          phoneNumbers: [],
+          emails: [],
+          tags: [],
+          note: "",
+        },
+      ],
+    };
+    await Deno.writeTextFile(db, JSON.stringify(legacy));
+
+    const r = await runCli(["search", "--id", "legacy-id"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    // The renderer should expose the backfilled epoch for both
+    // timestamps. The user sees a recognisable date rather than "Invalid
+    // Date" or a crash.
+    assertStringIncludes(
+      r.stdout,
+      "1970-01-01T00:00:00.000Z",
+    );
+  });
+});

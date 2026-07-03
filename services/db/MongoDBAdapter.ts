@@ -18,7 +18,7 @@ import { PersonShape } from "../../schemas/Person/index.ts";
 // task needs `--allow-net=<host>` (or `--allow-net` for development) in
 // addition to the env/read flags.
 
-type ContactDoc = Omit<PersonShape, "id"> & {
+type ContactDoc = Omit<PersonShape, "id" | "createdAt" | "updatedAt"> & {
   // MongoDB's own identifier. We never expose this to the CLI — the public
   // PersonShape.id is the hex string of this ObjectId, and that's what
   // callers see and use to match.
@@ -27,6 +27,12 @@ type ContactDoc = Omit<PersonShape, "id"> & {
   // PersonShape.id is always derived from _id; we never round-trip it
   // through Mongo, which avoids any "is this the doc's id or the public
   // id?" ambiguity.
+  //
+  // createdAt / updatedAt are stored as BSON Date (the native Mongo type),
+  // so we expose them on the persisted shape and re-attach them to the
+  // public PersonShape on the way out.
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 const toPerson = (doc: ContactDoc | null): PersonShape | null => {
@@ -123,9 +129,15 @@ export const MongoDBServiceLive: Layer.Layer<
         // Build the document to write. We never persist Mongo's _id as the
         // public id; we always derive it from _id on the way out. The id
         // field is dropped here (the upsert path re-derives it from _id,
-        // the insert path uses Mongo's auto-assigned _id).
-        const { id: _ignored, ...rest } = contact;
-        const doc: ContactDoc = { ...rest };
+        // the insert path uses Mongo's auto-assigned _id). The two
+        // timestamp fields are owned by the adapter — stamp them now.
+        const { id: _ignoredId, ...rest } = contact;
+        const now = new Date();
+        const doc: ContactDoc = {
+          ...rest,
+          createdAt: now,
+          updatedAt: now,
+        };
 
         if (hasId) {
           const _id = new ObjectId(incomingId as string);
@@ -219,9 +231,16 @@ export const MongoDBServiceLive: Layer.Layer<
         if (!isValidObjectId(id)) {
           return yield* fail(`No contact with id ${id}.`);
         }
-        // Drop any id field on the patch — the row is anchored by the
-        // command-line id, the patch can't re-anchor it.
-        const { id: _ignored, ...rest } = patch;
+        // Drop id, createdAt, and updatedAt from the patch — the row is
+        // anchored by the command-line id, and the two timestamps are
+        // system-managed. We bump updatedAt to "now" on every successful
+        // update; createdAt is preserved by never being in the $set.
+        const {
+          id: _ignoredId,
+          createdAt: _ignoredCreated,
+          updatedAt: _ignoredUpdated,
+          ...rest
+        } = patch;
         if (Object.keys(rest).length === 0) {
           // Empty patch: read and return the current record, no write.
           const current = yield* getContactsById(id);
@@ -234,7 +253,7 @@ export const MongoDBServiceLive: Layer.Layer<
           Effect.tryPromise(() =>
             collection.findOneAndUpdate(
               { _id: new ObjectId(id) },
-              { $set: rest },
+              { $set: { ...rest, updatedAt: new Date() } },
               { returnDocument: "after" },
             )
           ),

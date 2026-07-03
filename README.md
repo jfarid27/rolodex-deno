@@ -76,6 +76,42 @@ Rules:
   and the record is left unchanged.
 - An unknown id produces a friendly error (exit 1) and the database is not
   touched.
+- The two system-managed fields `createdAt` and `updatedAt` are not patchable.
+  Even if you include them in the JSON, the adapter drops them. `createdAt` is
+  preserved from the original record; `updatedAt` is bumped to "now" on every
+  successful update.
+
+## Timestamps
+
+Every contact carries two system-managed timestamps that the adapters own —
+callers cannot set them through `create` or `update`:
+
+- `createdAt` — set to the moment the contact was first inserted. Preserved
+  across updates.
+- `updatedAt` — set on insert and bumped to the current time on every update.
+
+Both fields are `Date` instances in memory (typed as `Schema.DateFromSelf`). The
+on-disk format depends on the adapter:
+
+- **File adapter** — persisted as ISO 8601 strings
+  (`"2024-01-01T00:00:00.000Z"`). On read, ISO strings are converted back to
+  `Date` instances. Records written before the timestamp feature (no
+  `createdAt`/`updatedAt` on disk) are backfilled with the epoch
+  (`1970-01-01T00:00:00.000Z`) so old data files continue to load.
+- **MongoDB adapter** — persisted as BSON `Date`. The driver returns them as
+  `Date` instances on read.
+
+The CLI renders both fields as ISO 8601 strings in the search output:
+
+```
+#6a46ebbc5d3cdd56844aba92  Ada Lovelace
+  phones : +44-0
+  emails : ada@example.com
+  tags   : math, computing
+  note   : first programmer
+  created: 2024-01-01T00:00:00.000Z
+  updated: 2024-01-01T00:00:00.000Z
+```
 
 ## Cross-field search
 
@@ -109,12 +145,27 @@ The `create` command takes a JSON object matching this schema:
   emails: string[],
   tags: string[],
   note: string,
-  id?: string | null,   // ignored on create; assigned by the adapter
 }
 ```
 
-The `update` command takes any subset of the above (excluding `id`). Anything
-else in the JSON is rejected with a schema error.
+The `update` command takes any subset of the above. Anything else in the JSON is
+rejected with a schema error.
+
+In memory, a contact also carries `id`, `createdAt`, and `updatedAt`:
+
+```ts
+{
+  id: string | null,           // assigned by the adapter on create
+  firstName: string,
+  lastName: string,
+  phoneNumbers: string[],
+  emails: string[],
+  tags: string[],
+  note: string,
+  createdAt: Date,             // set by the adapter; preserved on update
+  updatedAt: Date,             // set by the adapter; bumped on every update
+}
+```
 
 Ids are strings throughout. The default (file) adapter assigns a
 `crypto.randomUUID()` on create; the Mongo adapter assigns an ObjectId hex
@@ -229,5 +280,6 @@ services/
     MongoDBAdapter.ts     MongoDB-backed implementation
 schemas/
   DataBase.ts             { contacts: PersonShape[] } (file adapter only)
-  Person/index.ts         PersonSchema + PersonPatchSchema (effect) + types
+  Person/index.ts         PersonSchema + PersonInputSchema + PersonPatchSchema (effect) + types
+  Person/index_test.ts    schema decode tests
 ```
