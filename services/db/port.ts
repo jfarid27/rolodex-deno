@@ -14,13 +14,19 @@ export interface DBServicePort {
     contact: PersonShape,
   ) => Effect.Effect<PersonShape, DBServiceError>;
   readonly getContactsById: (
-    query: number,
+    query: string,
   ) => Effect.Effect<Option.Option<PersonShape>, DBServiceError>;
   readonly getContactsByTag: (
     query: string,
   ) => Effect.Effect<Option.Option<PersonShape[]>, DBServiceError>;
+  // Cross-field search. Matches the query as a case-insensitive substring
+  // against any of: firstName, lastName, any tag, and the note. Returns
+  // every contact that matches on at least one of those fields.
+  readonly searchContacts: (
+    query: string,
+  ) => Effect.Effect<Option.Option<PersonShape[]>, DBServiceError>;
   readonly updateContact: (
-    id: number,
+    id: string,
     patch: Partial<PersonShape>,
   ) => Effect.Effect<PersonShape, DBServiceError>;
 }

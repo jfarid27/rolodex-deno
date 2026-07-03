@@ -20,9 +20,9 @@ type SearchMode = "name" | "id" | "tag";
 interface ParsedArgs {
   subcommand: "search" | "create" | "update" | "help";
   searchMode?: SearchMode;
-  searchQuery?: string | number;
+  searchQuery?: string;
   createJson?: string;
-  updateId?: number;
+  updateId?: string;
   updateJson?: string;
 }
 
@@ -38,15 +38,16 @@ USAGE:
 
 EXAMPLES:
   deno task rolodex search --name ada
-  deno task rolodex search --id   1783025641867
+  deno task rolodex search --id   6a46ebbc5d3cdd56844aba92
   deno task rolodex search --tag  computing
   deno task rolodex create '{"firstName":"Ada","lastName":"Lovelace","phoneNumbers":["+44-0"],"emails":["ada@example.com"],"tags":["math","computing"],"note":"first programmer"}'
-  deno task rolodex update 1783025641867 '{"note":"analytical engine","tags":["math","computing","history"]}'
+  deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine","tags":["math","computing","history"]}'
 
 ENV:
-  DB_FILE_LOCATION  Path to the JSON database file. Required. The rolodex task
-                    sets a default of ./rolodex-db.json in the current working
-                    directory.`;
+  DB_FILE_LOCATION  Path to the JSON database file (file adapter).
+  MONGO_URI         mongodb:// connection string (Mongo adapter).
+  MONGO_DB          Database name (default: rolodex).
+  MONGO_COLLECTION  Collection name (default: contacts).`;
 
 const usageError = (msg: string): never => {
   console.error(`error: ${msg}\n`);
@@ -56,7 +57,7 @@ const usageError = (msg: string): never => {
 
 const parseSearch = (
   rest: string[],
-): { searchMode: SearchMode; searchQuery: string | number } => {
+): { searchMode: SearchMode; searchQuery: string } => {
   const flags = rest.filter((r) => r.startsWith("--"));
   if (flags.length === 0) {
     return usageError("search requires one of --name, --id, --tag");
@@ -68,14 +69,11 @@ const parseSearch = (
   const idx = rest.indexOf(flag);
   const value = rest[idx + 1];
   if (!value) return usageError(`${flag} requires a value`);
+  // All three search modes take a string. The adapter validates the shape of
+  // the value (e.g. MongoDB's adapter checks for a 24-char ObjectId hex) and
+  // returns None on miss.
   if (flag === "--name") return { searchMode: "name", searchQuery: value };
-  if (flag === "--id") {
-    const n = Number(value);
-    if (!Number.isFinite(n) || !Number.isInteger(n)) {
-      return usageError(`--id must be an integer, got: ${value}`);
-    }
-    return { searchMode: "id", searchQuery: n };
-  }
+  if (flag === "--id") return { searchMode: "id", searchQuery: value };
   if (flag === "--tag") return { searchMode: "tag", searchQuery: value };
   return usageError(`unknown search flag: ${flag}`);
 };
@@ -110,11 +108,7 @@ const parseArgs = (args: string[]): ParsedArgs => {
       );
     }
     const [idStr, jsonStr] = rest;
-    const id = Number(idStr);
-    if (!Number.isFinite(id) || !Number.isInteger(id)) {
-      return usageError(`update id must be an integer, got: ${idStr}`);
-    }
-    return { subcommand: "update", updateId: id, updateJson: jsonStr };
+    return { subcommand: "update", updateId: idStr, updateJson: jsonStr };
   }
 
   return usageError(`unknown subcommand: ${subcommand}`);
@@ -134,11 +128,11 @@ const renderContact = (p: PersonShape): string => {
   ].join("\n");
 };
 
-const runSearch = (mode: SearchMode, query: string | number) =>
+const runSearch = (mode: SearchMode, query: string) =>
   Effect.gen(function* () {
     const db = yield* DBService;
     if (mode === "name") {
-      const result = yield* db.getContactsByName(String(query));
+      const result = yield* db.getContactsByName(query);
       if (result._tag === "None" || result.value.length === 0) {
         return yield* Console.log("(no contacts)");
       }
@@ -148,14 +142,14 @@ const runSearch = (mode: SearchMode, query: string | number) =>
       return yield* Console.log(result.value.map(renderContact).join("\n\n"));
     }
     if (mode === "id") {
-      const result = yield* db.getContactsById(query as number);
+      const result = yield* db.getContactsById(query);
       if (result._tag === "None") {
         return yield* Console.log(`(no contact with id ${query})`);
       }
       return yield* Console.log(renderContact(result.value));
     }
     // mode === "tag"
-    const result = yield* db.getContactsByTag(String(query));
+    const result = yield* db.getContactsByTag(query);
     if (result._tag === "None" || result.value.length === 0) {
       return yield* Console.log(`(no contacts with tag "${query}")`);
     }
@@ -193,7 +187,7 @@ const runCreate = (rawJson: string) =>
     yield* Console.log(renderContact(saved));
   });
 
-const runUpdate = (id: number, rawJson: string) =>
+const runUpdate = (id: string, rawJson: string) =>
   Effect.gen(function* () {
     const db = yield* DBService;
 
