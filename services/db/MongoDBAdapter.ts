@@ -266,6 +266,19 @@ export const MongoDBServiceLive: Layer.Layer<
         return person;
       });
 
+    const getStats: DBServicePort["getStats"] = () =>
+      Effect.gen(function* () {
+        // countDocuments is the canonical aggregate; estimatedDocumentCount
+        // skips the scan but can return a stale value on a sharded cluster
+        // and ignores any filter we might add later, so we use the precise
+        // count for a small personal-rolodex dataset.
+        const n = yield* wrap(
+          Effect.tryPromise(() => collection.countDocuments()),
+          "MongoDB countDocuments failed",
+        );
+        return { counts: { contacts: n } };
+      });
+
     return {
       getContactsByName,
       saveContact,
@@ -273,6 +286,7 @@ export const MongoDBServiceLive: Layer.Layer<
       getContactsByTag,
       searchContacts,
       updateContact,
+      getStats,
     };
   }),
 );

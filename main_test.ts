@@ -432,6 +432,128 @@ Deno.test("help text mentions update subcommand", async () => {
   });
 });
 
+Deno.test("help text mentions stats subcommand", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["help"], db);
+    assertEquals(r.code, 0);
+    assertStringIncludes(r.stdout, "rolodex stats");
+  });
+});
+
+Deno.test("stats on an empty database returns contacts: 0", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["stats"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    // The CLI prints the stats object as pretty-printed JSON. Parse it back
+    // so we're testing the structured contract, not the formatting.
+    const stats = JSON.parse(r.stdout) as {
+      counts: { contacts: number };
+    };
+    assertEquals(stats.counts.contacts, 0);
+  });
+});
+
+Deno.test("stats reflects the current contact count", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    const grace = JSON.stringify({
+      firstName: "Grace",
+      lastName: "Hopper",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+    assertEquals((await runCli(["create", grace], db)).code, 0);
+
+    const r = await runCli(["stats"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const stats = JSON.parse(r.stdout) as {
+      counts: { contacts: number };
+    };
+    assertEquals(stats.counts.contacts, 2);
+  });
+});
+
+Deno.test("stats count decrements after... actually, only create exists", async () => {
+  // There's no delete subcommand yet, so the only way to reduce the count
+  // is to seed with a non-empty file and assert the adapter reads it
+  // through.
+  await withTempDb(async (db) => {
+    // Seed with three contacts before the CLI ever runs.
+    await Deno.writeTextFile(
+      db,
+      JSON.stringify({
+        contacts: [
+          {
+            id: "a",
+            firstName: "A",
+            lastName: "A",
+            phoneNumbers: [],
+            emails: [],
+            tags: [],
+            note: "",
+            createdAt: "1970-01-01T00:00:00.000Z",
+            updatedAt: "1970-01-01T00:00:00.000Z",
+          },
+          {
+            id: "b",
+            firstName: "B",
+            lastName: "B",
+            phoneNumbers: [],
+            emails: [],
+            tags: [],
+            note: "",
+            createdAt: "1970-01-01T00:00:00.000Z",
+            updatedAt: "1970-01-01T00:00:00.000Z",
+          },
+          {
+            id: "c",
+            firstName: "C",
+            lastName: "C",
+            phoneNumbers: [],
+            emails: [],
+            tags: [],
+            note: "",
+            createdAt: "1970-01-01T00:00:00.000Z",
+            updatedAt: "1970-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const r = await runCli(["stats"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const stats = JSON.parse(r.stdout) as {
+      counts: { contacts: number };
+    };
+    assertEquals(stats.counts.contacts, 3);
+  });
+});
+
+Deno.test("stats with extra args returns usage error (exit 2)", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["stats", "extra"], db);
+    assertEquals(r.code, 2);
+    assertStringIncludes(r.stderr, "no arguments");
+  });
+});
+
+Deno.test("help text mentions update subcommand", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["help"], db);
+    assertEquals(r.code, 0);
+    assertStringIncludes(r.stdout, "update <id>");
+  });
+});
+
 // On-disk representation of a contact. Mirrors the file-adapter's storage
 // format: timestamps are ISO strings, not Date instances. We type it
 // loosely to keep the test focused on the timestamp fields' shape rather

@@ -41,6 +41,13 @@ export interface DBServicePort {
     id: string,
     patch: Partial<PersonShape>,
   ) => Effect.Effect<PersonShape, DBServiceError>;
+  // Aggregate stats over the current contents of the database. Returned
+  // shape is `{ counts: { contacts: number, ... } }` so future fields
+  // (e.g. `tags`, `recent`) can be added without breaking callers.
+  readonly getStats: () => Effect.Effect<
+    { counts: { contacts: number } },
+    DBServiceError
+  >;
 }
 
 export class DBService extends Context.Tag("Rolodex.services.DBService")<

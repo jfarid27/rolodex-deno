@@ -253,6 +253,20 @@ const makeService = (
         return updated;
       });
 
+    const getStats: DBServicePort["getStats"] = () =>
+      Effect.gen(function* () {
+        if (!db.data || !Array.isArray(db.data.contacts)) {
+          return yield* fail(
+            "Database is in an invalid state: missing contacts array.",
+          );
+        }
+        // Count whatever the on-disk/in-memory list actually contains. We
+        // trust the array length rather than re-validating each row, so a
+        // future "soft-deleted" flag or filter on this array would be
+        // reflected automatically.
+        return { counts: { contacts: db.data.contacts.length } };
+      });
+
     return {
       getContactsByName,
       saveContact,
@@ -260,6 +274,7 @@ const makeService = (
       getContactsByTag,
       searchContacts,
       updateContact,
+      getStats,
     };
   });
 

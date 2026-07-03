@@ -18,7 +18,7 @@ import { LowDBServiceLive } from "./db/LowDBAdapter.ts";
 type SearchMode = "name" | "id" | "tag";
 
 interface ParsedArgs {
-  subcommand: "search" | "create" | "update" | "help";
+  subcommand: "search" | "create" | "update" | "stats" | "help";
   searchMode?: SearchMode;
   searchQuery?: string;
   createJson?: string;
@@ -34,6 +34,7 @@ USAGE:
   deno task rolodex search --tag  <query>
   deno task rolodex create <contact-json>
   deno task rolodex update <id> <contact-json>
+  deno task rolodex stats
   deno task rolodex help
 
 EXAMPLES:
@@ -42,6 +43,7 @@ EXAMPLES:
   deno task rolodex search --tag  computing
   deno task rolodex create '{"firstName":"Ada","lastName":"Lovelace","phoneNumbers":["+44-0"],"emails":["ada@example.com"],"tags":["math","computing"],"note":"first programmer"}'
   deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine","tags":["math","computing","history"]}'
+  deno task rolodex stats
 
 ENV:
   DB_FILE_LOCATION  Path to the JSON database file (file adapter).
@@ -109,6 +111,13 @@ const parseArgs = (args: string[]): ParsedArgs => {
     }
     const [idStr, jsonStr] = rest;
     return { subcommand: "update", updateId: idStr, updateJson: jsonStr };
+  }
+
+  if (subcommand === "stats") {
+    if (rest.length !== 0) {
+      return usageError("stats takes no arguments");
+    }
+    return { subcommand: "stats" };
   }
 
   return usageError(`unknown subcommand: ${subcommand}`);
@@ -222,6 +231,16 @@ const runUpdate = (id: string, rawJson: string) =>
     yield* Console.log(renderContact(updated));
   });
 
+const runStats = () =>
+  Effect.gen(function* () {
+    const db = yield* DBService;
+    const stats = yield* db.getStats();
+    // JSON output so downstream tools (jq, scripts) can consume it cleanly.
+    // The pretty-printing matches the on-disk file adapter's format so a
+    // human reading the output gets a familiar shape.
+    yield* Console.log(JSON.stringify(stats, null, 2));
+  });
+
 // Build a runtime that pulls DB_FILE_LOCATION from the env (with a default).
 const buildRuntime = (): ManagedRuntime.ManagedRuntime<
   DBService,
@@ -252,6 +271,8 @@ export const runCLI = async (args: string[]): Promise<void> => {
         return yield* runCreate(parsed.createJson!);
       case "update":
         return yield* runUpdate(parsed.updateId!, parsed.updateJson!);
+      case "stats":
+        return yield* runStats();
     }
   });
 
