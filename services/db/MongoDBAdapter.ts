@@ -266,6 +266,43 @@ export const MongoDBServiceLive: Layer.Layer<
         return person;
       });
 
+    const getStats: DBServicePort["getStats"] = () =>
+      Effect.gen(function* () {
+        // countDocuments is the canonical aggregate; estimatedDocumentCount
+        // skips the scan but can return a stale value on a sharded cluster
+        // and ignores any filter we might add later, so we use the precise
+        // count for a small personal-rolodex dataset.
+        const n = yield* wrap(
+          Effect.tryPromise(() => collection.countDocuments()),
+          "MongoDB countDocuments failed",
+        );
+        return { counts: { contacts: n } };
+      });
+
+    const getTags: DBServicePort["getTags"] = () =>
+      Effect.gen(function* () {
+        // `distinct` collapses duplicates server-side and returns a flat
+        // array of every unique tag across the collection. We do a
+        // case-insensitive dedup + sort in the application layer so the
+        // result matches the file adapter's contract exactly (otherwise
+        // Mongo would return "Math" and "math" as two entries).
+        const raw = yield* wrap(
+          Effect.tryPromise(() => collection.distinct("tags")),
+          "MongoDB distinct tags failed",
+        );
+        const filtered = raw.filter((t): t is string =>
+          typeof t === "string" && t.length > 0
+        );
+        const seen = new Map<string, string>();
+        for (const t of filtered) {
+          const key = t.toLowerCase();
+          if (!seen.has(key)) seen.set(key, t);
+        }
+        return [...seen.values()].sort((a, b) =>
+          a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+      });
+
     return {
       getContactsByName,
       saveContact,
@@ -273,6 +310,8 @@ export const MongoDBServiceLive: Layer.Layer<
       getContactsByTag,
       searchContacts,
       updateContact,
+      getStats,
+      getTags,
     };
   }),
 );

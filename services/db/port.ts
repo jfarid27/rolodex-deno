@@ -41,6 +41,18 @@ export interface DBServicePort {
     id: string,
     patch: Partial<PersonShape>,
   ) => Effect.Effect<PersonShape, DBServiceError>;
+  // Aggregate stats over the current contents of the database. Returned
+  // shape is `{ counts: { contacts: number, ... } }` so future fields
+  // (e.g. `tags`, `recent`) can be added without breaking callers.
+  readonly getStats: () => Effect.Effect<
+    { counts: { contacts: number } },
+    DBServiceError
+  >;
+  // Distinct list of every tag that appears on at least one contact, in
+  // case-insensitive sort order. Duplicates are collapsed. Tags are
+  // returned as-is (no normalization beyond the case-fold) so a contact
+  // tagged "Math" and one tagged "math" both surface as "math".
+  readonly getTags: () => Effect.Effect<string[], DBServiceError>;
 }
 
 export class DBService extends Context.Tag("Rolodex.services.DBService")<

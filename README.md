@@ -33,6 +33,8 @@ deno task rolodex search --name ada
 deno task rolodex search --id   6a46ebbc5d3cdd56844aba92
 deno task rolodex search --tag  computing
 deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine","tags":["math","computing","history"]}'
+deno task rolodex stats
+deno task rolodex tags
 ```
 
 Subcommands:
@@ -44,6 +46,8 @@ Subcommands:
 | `search --tag <query>`       | Case-insensitive substring match on any tag.                                                    |
 | `create <contact-json>`      | Insert a contact. Id is auto-assigned; ignore it.                                               |
 | `update <id> <contact-json>` | Apply a partial patch to the contact with the given id. Only the fields you supply are changed. |
+| `stats`                      | Print a JSON object of aggregate counts (see [Stats](#stats)).                                  |
+| `tags`                       | Print a JSON array of every distinct tag (see [Tags](#tags)).                                   |
 | `help`                       | Print the full help text.                                                                       |
 
 Exit codes: `0` success, `1` runtime error (DB, invalid JSON, schema mismatch),
@@ -132,6 +136,53 @@ Both adapters implement `searchContacts`:
 - **MongoDB adapter**: issues a single `$or` regex query across the four fields,
   then re-applies the same per-field substring filter in the application layer
   (so the two adapters return identical results for the same data).
+
+## Stats
+
+`stats` prints a JSON object of aggregate counts over the current database. The
+shape is extensible — new counts can be added to `counts` without breaking
+callers:
+
+```bash
+$ deno task rolodex stats
+{
+  "counts": {
+    "contacts": 12
+  }
+}
+```
+
+Both adapters implement `getStats`:
+
+- **File adapter**: returns `db.data.contacts.length`.
+- **MongoDB adapter**: uses `collection.countDocuments()` (precise, not
+  `estimatedDocumentCount`, since the dataset is small and a future filter would
+  be respected).
+
+## Tags
+
+`tags` prints a JSON array of every distinct tag that appears on at least one
+contact. Duplicates are collapsed case-insensitively (`Math` and `math` become
+one entry), the first-seen casing is preserved, and the result is sorted
+case-insensitively:
+
+```bash
+$ deno task rolodex tags
+[
+  "computing",
+  "cs",
+  "math",
+  "navy"
+]
+```
+
+Both adapters implement `getTags`:
+
+- **File adapter**: walks the in-memory contact list and dedupes via a
+  `Map<lowercased, first-seen-casing>`.
+- **MongoDB adapter**: uses `collection.distinct("tags")` (server-side dedupe),
+  then re-dedupes case-insensitively in the application layer so the two
+  adapters return identical results for the same data.
 
 ## Contact shape
 

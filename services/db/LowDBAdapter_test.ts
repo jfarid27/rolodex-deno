@@ -500,3 +500,55 @@ Deno.test(
     }
   },
 );
+
+// getTags tests. Mirrors the contract asserted in main_test.ts but
+// exercises the adapter layer directly, so the file-format quirks
+// (ISO-string dates, on-disk shape) can't mask a regression.
+const getTags = (
+  runtime: ManagedRuntime.ManagedRuntime<DBService, unknown>,
+): Promise<string[]> => {
+  const program = Effect.gen(function* () {
+    const db = yield* DBService;
+    return yield* db.getTags();
+  });
+  return runtime.runPromise(program);
+};
+
+Deno.test("getTags returns [] for an empty database", async () => {
+  await withTempLayer(async (runtime) => {
+    const tags = await getTags(runtime);
+    assertEquals(tags, []);
+  });
+});
+
+Deno.test("getTags returns distinct, case-folded tags sorted", async () => {
+  await withTempLayer(async (runtime) => {
+    await runtime.runPromise(
+      seed([
+        make("Ada", "Lovelace", ["math", "computing"], "x"),
+        make("Grace", "Hopper", ["navy", "computing"], "x"),
+        make("Alan", "Turing", ["cs", "Math"], "x"),
+      ]),
+    );
+    const tags = await getTags(runtime);
+    // "Math" and "math" collapse; "computing" appears on two contacts
+    // and is still listed once. Order is case-insensitive alpha.
+    assertEquals(tags, ["computing", "cs", "math", "navy"]);
+  });
+});
+
+Deno.test("getTags preserves the first-seen casing on collisions", async () => {
+  // Ada sees "math" first, Alan later sees "Math" — Ada's "math" wins
+  // because the dedupe key is the lowercased value and the first one
+  // to set the key claims it.
+  await withTempLayer(async (runtime) => {
+    await runtime.runPromise(
+      seed([
+        make("Ada", "Lovelace", ["math"], "x"),
+        make("Alan", "Turing", ["Math"], "x"),
+      ]),
+    );
+    const tags = await getTags(runtime);
+    assertEquals(tags, ["math"]);
+  });
+});
