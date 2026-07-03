@@ -48,6 +48,11 @@ export interface DBServicePort {
     { counts: { contacts: number } },
     DBServiceError
   >;
+  // Distinct list of every tag that appears on at least one contact, in
+  // case-insensitive sort order. Duplicates are collapsed. Tags are
+  // returned as-is (no normalization beyond the case-fold) so a contact
+  // tagged "Math" and one tagged "math" both surface as "math".
+  readonly getTags: () => Effect.Effect<string[], DBServiceError>;
 }
 
 export class DBService extends Context.Tag("Rolodex.services.DBService")<

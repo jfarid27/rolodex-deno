@@ -18,7 +18,7 @@ import { LowDBServiceLive } from "./db/LowDBAdapter.ts";
 type SearchMode = "name" | "id" | "tag";
 
 interface ParsedArgs {
-  subcommand: "search" | "create" | "update" | "stats" | "help";
+  subcommand: "search" | "create" | "update" | "stats" | "tags" | "help";
   searchMode?: SearchMode;
   searchQuery?: string;
   createJson?: string;
@@ -35,6 +35,7 @@ USAGE:
   deno task rolodex create <contact-json>
   deno task rolodex update <id> <contact-json>
   deno task rolodex stats
+  deno task rolodex tags
   deno task rolodex help
 
 EXAMPLES:
@@ -44,6 +45,7 @@ EXAMPLES:
   deno task rolodex create '{"firstName":"Ada","lastName":"Lovelace","phoneNumbers":["+44-0"],"emails":["ada@example.com"],"tags":["math","computing"],"note":"first programmer"}'
   deno task rolodex update 6a46ebbc5d3cdd56844aba92 '{"note":"analytical engine","tags":["math","computing","history"]}'
   deno task rolodex stats
+  deno task rolodex tags
 
 ENV:
   DB_FILE_LOCATION  Path to the JSON database file (file adapter).
@@ -118,6 +120,13 @@ const parseArgs = (args: string[]): ParsedArgs => {
       return usageError("stats takes no arguments");
     }
     return { subcommand: "stats" };
+  }
+
+  if (subcommand === "tags") {
+    if (rest.length !== 0) {
+      return usageError("tags takes no arguments");
+    }
+    return { subcommand: "tags" };
   }
 
   return usageError(`unknown subcommand: ${subcommand}`);
@@ -241,6 +250,15 @@ const runStats = () =>
     yield* Console.log(JSON.stringify(stats, null, 2));
   });
 
+const runTags = () =>
+  Effect.gen(function* () {
+    const db = yield* DBService;
+    const tags = yield* db.getTags();
+    // JSON array of strings, pretty-printed. Empty DB → [] (still valid
+    // JSON, still machine-friendly, still human-readable).
+    yield* Console.log(JSON.stringify(tags, null, 2));
+  });
+
 // Build a runtime that pulls DB_FILE_LOCATION from the env (with a default).
 const buildRuntime = (): ManagedRuntime.ManagedRuntime<
   DBService,
@@ -273,6 +291,8 @@ export const runCLI = async (args: string[]): Promise<void> => {
         return yield* runUpdate(parsed.updateId!, parsed.updateJson!);
       case "stats":
         return yield* runStats();
+      case "tags":
+        return yield* runTags();
     }
   });
 

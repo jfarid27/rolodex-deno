@@ -546,6 +546,91 @@ Deno.test("stats with extra args returns usage error (exit 2)", async () => {
   });
 });
 
+Deno.test("help text mentions tags subcommand", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["help"], db);
+    assertEquals(r.code, 0);
+    assertStringIncludes(r.stdout, "rolodex tags");
+  });
+});
+
+Deno.test("tags on an empty database returns []", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["tags"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const tags = JSON.parse(r.stdout) as string[];
+    assertEquals(tags, []);
+  });
+});
+
+Deno.test("tags returns the distinct, sorted union across contacts", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: ["math", "computing"],
+      note: "",
+    });
+    const grace = JSON.stringify({
+      firstName: "Grace",
+      lastName: "Hopper",
+      phoneNumbers: [],
+      emails: [],
+      tags: ["navy", "computing"],
+      note: "",
+    });
+    const alan = JSON.stringify({
+      firstName: "Alan",
+      lastName: "Turing",
+      phoneNumbers: [],
+      emails: [],
+      tags: ["cs", "Math"], // mixed case: must dedupe to "math"
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+    assertEquals((await runCli(["create", grace], db)).code, 0);
+    assertEquals((await runCli(["create", alan], db)).code, 0);
+
+    const r = await runCli(["tags"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const tags = JSON.parse(r.stdout) as string[];
+    // Distinct (Math and math collapse), sorted case-insensitively.
+    // "Math" was seen first (Ada's "math" comes before Alan's "Math" only
+    // because Alan's contact was created last; ordering of equal keys
+    // depends on the case-folding, not on creation order). The
+    // contract is: "first casing wins" — Ada's "math" is the winner.
+    assertEquals(tags, ["computing", "cs", "math", "navy"]);
+  });
+});
+
+Deno.test("tags on contacts with no tags returns []", async () => {
+  await withTempDb(async (db) => {
+    const ada = JSON.stringify({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumbers: [],
+      emails: [],
+      tags: [],
+      note: "",
+    });
+    assertEquals((await runCli(["create", ada], db)).code, 0);
+    const r = await runCli(["tags"], db);
+    assertEquals(r.code, 0, `stderr: ${r.stderr}`);
+    const tags = JSON.parse(r.stdout) as string[];
+    assertEquals(tags, []);
+  });
+});
+
+Deno.test("tags with extra args returns usage error (exit 2)", async () => {
+  await withTempDb(async (db) => {
+    const r = await runCli(["tags", "extra"], db);
+    assertEquals(r.code, 2);
+    assertStringIncludes(r.stderr, "no arguments");
+  });
+});
+
 Deno.test("help text mentions update subcommand", async () => {
   await withTempDb(async (db) => {
     const r = await runCli(["help"], db);

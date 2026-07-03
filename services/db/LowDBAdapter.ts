@@ -267,6 +267,31 @@ const makeService = (
         return { counts: { contacts: db.data.contacts.length } };
       });
 
+    const getTags: DBServicePort["getTags"] = () =>
+      Effect.gen(function* () {
+        if (!db.data || !Array.isArray(db.data.contacts)) {
+          return yield* fail(
+            "Database is in an invalid state: missing contacts array.",
+          );
+        }
+        // Dedupe by case-insensitive key, but display the first casing we
+        // see so the user gets the spelling they typed. Sort the
+        // result alphabetically (case-insensitive) so the output is
+        // stable across calls.
+        const seen = new Map<string, string>();
+        for (const c of db.data.contacts) {
+          if (!Array.isArray(c.tags)) continue;
+          for (const raw of c.tags) {
+            if (typeof raw !== "string") continue;
+            const key = raw.toLowerCase();
+            if (!seen.has(key)) seen.set(key, raw);
+          }
+        }
+        return [...seen.values()].sort((a, b) =>
+          a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+      });
+
     return {
       getContactsByName,
       saveContact,
@@ -275,6 +300,7 @@ const makeService = (
       searchContacts,
       updateContact,
       getStats,
+      getTags,
     };
   });
 
